@@ -39,16 +39,12 @@ const els = {
   saveFile: document.getElementById("saveFile"),
   loadFile: document.getElementById("loadFile"),
   loadFileInput: document.getElementById("loadFileInput"),
-  driveWebhook: document.getElementById("driveWebhook"),
-  saveDrive: document.getElementById("saveDrive"),
-  loadDrive: document.getElementById("loadDrive"),
 };
 
 init();
 
 async function init() {
   load();
-  if (els.driveWebhook) els.driveWebhook.value = localStorage.getItem("pizarra-drive-webhook") || "";
   if (!Object.keys(state.boards).length) {
     const seeded = await seedDefaultBoard();
     if (!seeded) createBoard("Proyecto principal", { skipUndo: true });
@@ -105,9 +101,6 @@ function bindUI() {
   els.saveFile?.addEventListener("click", saveToFile);
   els.loadFile?.addEventListener("click", () => els.loadFileInput?.click());
   els.loadFileInput?.addEventListener("change", loadFromFile);
-  els.saveDrive?.addEventListener("click", saveToDrive);
-  els.loadDrive?.addEventListener("click", loadFromDrive);
-  els.driveWebhook?.addEventListener("change", () => localStorage.setItem("pizarra-drive-webhook", (els.driveWebhook.value || "").trim()));
 
   let panning = false;
   let start = { x: 0, y: 0 };
@@ -432,8 +425,8 @@ function renderBoard() {
 
     const content = el.querySelector(".content");
     if (node.type === "note") content.innerHTML = `<div class="note-pill" contenteditable="true">${escapeHtml(node.data.text || "")}</div>`;
-    if (node.type === "image") content.innerHTML = `<img src="${node.data.url}" alt="Imagen" />`;
-    if (node.type === "video") content.innerHTML = videoEmbed(node.data.url);
+    if (node.type === "image") renderMediaNode(content, node, "image");
+    if (node.type === "video") renderMediaNode(content, node, "video");
     if (node.type === "timeline") content.append(timeline(node.data.items || [], node));
 
 
@@ -457,6 +450,28 @@ function renderBoard() {
       });
     }
 
+    if (node.type === "image" || node.type === "video") {
+      const urlInput = content.querySelector(".media-url");
+      const applyBtn = content.querySelector(".media-apply");
+      const updateUrl = () => {
+        const nextUrl = (urlInput?.value || "").trim();
+        if (!nextUrl) return;
+        pushUndoState();
+        node.data.url = nextUrl;
+        save();
+        renderBoard();
+      };
+      applyBtn?.addEventListener("click", (ev) => {
+        ev.stopPropagation();
+        updateUrl();
+      });
+      urlInput?.addEventListener("keydown", (ev) => {
+        if (ev.key === "Enter") {
+          ev.preventDefault();
+          updateUrl();
+        }
+      });
+    }
 
     const canResizePill = node.type === "note" || node.type === "timeline";
     const smallerBtn = el.querySelector(".pill-smaller");
@@ -595,6 +610,34 @@ function timeline(items, node) {
   return wrap;
 }
 
+
+function renderMediaNode(content, node, kind) {
+  const url = (node.data?.url || "").trim();
+  const escapedUrl = escapeHtml(url);
+  const hint = kind === "image"
+    ? "Pega una URL directa de imagen (https://...jpg, png, webp)."
+    : "Pega URL de YouTube/Vimeo o un enlace de video.";
+
+  let preview = `<div class="media-hint">Sin URL todavía.</div>`;
+  if (url) {
+    if (kind === "image") {
+      preview = `<img src="${escapedUrl}" alt="Imagen" loading="lazy" />`;
+    } else {
+      preview = videoEmbed(url);
+    }
+  }
+
+  content.innerHTML = `
+    <div class="media-editor">
+      <div class="row">
+        <input class="media-url" type="url" value="${escapedUrl}" placeholder="https://..." />
+        <button type="button" class="media-apply">Aplicar URL</button>
+      </div>
+      <div class="media-hint">${hint}</div>
+      <div class="media-preview">${preview}</div>
+    </div>
+  `;
+}
 
 function escapeHtml(value) {
   const text = String(value);
@@ -800,56 +843,6 @@ async function loadFromFile(ev) {
   }
 }
 
-
-async function saveToDrive() {
-  const webhook = (els.driveWebhook?.value || "").trim();
-  if (!webhook) {
-    alert("Configura la URL del Web App de Google Apps Script.");
-    return;
-  }
-  try {
-    const payload = buildSerializableState();
-    const res = await fetch(webhook, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "save", payload }),
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    localStorage.setItem("pizarra-drive-webhook", webhook);
-    alert("Pizarra guardada en Google Drive.");
-  } catch (err) {
-    alert(`Error guardando en Drive: ${err.message}`);
-  }
-}
-
-async function loadFromDrive() {
-  const webhook = (els.driveWebhook?.value || "").trim();
-  if (!webhook) {
-    alert("Configura la URL del Web App de Google Apps Script.");
-    return;
-  }
-  try {
-    const res = await fetch(`${webhook}${webhook.includes("?") ? "&" : "?"}action=load`);
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const parsed = await res.json();
-    const payload = parsed.payload || parsed;
-    if (!payload || typeof payload !== "object" || !payload.boards) {
-      throw new Error("Respuesta de Drive inválida.");
-    }
-
-    pushUndoState();
-    state.boards = payload.boards || {};
-    state.activeBoardId = payload.activeBoardId || Object.keys(state.boards)[0] || null;
-    state.viewport = payload.viewport || state.viewport;
-    localStorage.setItem("pizarra-drive-webhook", webhook);
-    save();
-    renderBoards();
-    renderBoard();
-    alert("Pizarra cargada desde Google Drive.");
-  } catch (err) {
-    alert(`Error cargando desde Drive: ${err.message}`);
-  }
-}
 
 function load() {
   let parsed = null;
